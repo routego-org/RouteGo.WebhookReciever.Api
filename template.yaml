@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: RouteGo webhook receiver - verifies payment gateway webhooks and queues them for Payment.
+
+Parameters:
+  WebhookQueueUrl:
+    Type: String
+    Description: URL of the payment-webhooks-q queue.
+  WebhookQueueArn:
+    Type: String
+    Description: ARN of the payment-webhooks-q queue.
+  GatewaySecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret routego/payment/gateway (JSON with a webhookSecret field).
+  SignatureHeader:
+    Type: String
+    Default: X-Signature
+    Description: Header the payment gateway puts its signature in.
+  ReplayWindowSeconds:
+    Type: Number
+    Default: 0
+    Description: Reject events older than this many seconds. 0 turns the age check off.
+
+Resources:
+  WebhookHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 40
+        ThrottlingRateLimit: 20
+
+  WebhookReceiverFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: WebhookReceiver/
+      Handler: WebhookReceiver::WebhookReceiver.Function::Handler
+      Runtime: dotnet10
+      MemorySize: 256
+      Timeout: 5
+      ReservedConcurrentExecutions: 10
+      Environment:
+        Variables:
+          SECRET_ID: !Ref GatewaySecretArn
+          QUEUE_URL: !Ref WebhookQueueUrl
+          SIGNATURE_HEADER: !Ref SignatureHeader
+          REPLAY_WINDOW_SECONDS: !Ref ReplayWindowSeconds
+      # Exactly two permission statements. Add kms:Decrypt on the key if the secret uses a customer-managed key.
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref GatewaySecretArn
+            - Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !Ref WebhookQueueArn
+      Events:
+        Webhook:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref WebhookHttpApi
+            Path: /webhooks/payment
+            Method: POST
+
+Outputs:
+  WebhookUrl:
+    Description: Give this URL to the payment gateway.
+    Value: !Sub "https://${WebhookHttpApi}.execute-api.${AWS::Region}.amazonaws.com/webhooks/payment"

@@ -1,0 +1,29 @@
+{
+  "version": "2.0",
+  "routeKey": "POST /webhooks/payment",
+  "rawPath": "/webhooks/payment",
+  "rawQueryString": "",
+  "headers": {
+    "content-type": "application/json",
+    "x-signature": "sha256=8cd8ada5b4397666dcc1a853e1d71f334f9e7af8ca8605ff3db42c3f4d078aaa"
+  },
+  "requestContext": {
+    "accountId": "000000000000",
+    "apiId": "local",
+    "domainName": "localhost",
+    "http": {
+      "method": "POST",
+      "path": "/webhooks/payment",
+      "protocol": "HTTP/1.1",
+      "sourceIp": "127.0.0.1",
+      "userAgent": "mock-gateway"
+    },
+    "requestId": "local-request",
+    "routeKey": "POST /webhooks/payment",
+    "stage": "$default",
+    "time": "02/Oct/2026:10:15:30 +0000",
+    "timeEpoch": 1790936130000
+  },
+  "body": "{\"gatewayEventId\":\"evt_local_0001\",\"gatewayRef\":\"ref_local_1\",\"outcome\":\"success\",\"amount\":49900,\"occurredAt\":\"2026-10-02T10:15:30Z\"}",
+  "isBase64Encoded": false
+}
