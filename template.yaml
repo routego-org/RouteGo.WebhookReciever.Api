@@ -20,6 +20,16 @@ Parameters:
     Type: Number
     Default: 0
     Description: Reject events older than this many seconds. 0 turns the age check off.
+  ReservedConcurrency:
+    Type: Number
+    Default: 10
+    Description: >-
+      Reserved concurrency for the function (caps a webhook flood). 0 = no reservation. New and
+      Free-plan AWS accounts have an account-wide limit of 10, and AWS refuses a reservation that
+      leaves fewer than 10 unreserved, so the pipeline passes 0 there.
+
+Conditions:
+  HasReservedConcurrency: !Not [!Equals [!Ref ReservedConcurrency, 0]]
 
 Resources:
   WebhookHttpApi:
@@ -37,7 +47,7 @@ Resources:
       Runtime: dotnet10
       MemorySize: 256
       Timeout: 5
-      ReservedConcurrentExecutions: 10
+      ReservedConcurrentExecutions: !If [HasReservedConcurrency, !Ref ReservedConcurrency, !Ref AWS::NoValue]
       Environment:
         Variables:
           SECRET_ID: !Ref GatewaySecretArn

@@ -1,0 +1,122 @@
+# CI/CD for Webhook Receiver (Lambda) (RouteGo.WebhookReciever.Api) — RouteGo DevOps course.
+#
+#   Pull request to main  ->  build + test                     (no AWS access at all)
+#   Push / merge to main  ->  build + test -> sam build -> sam deploy (CloudFormation)
+#
+# AWS access is keyless: GitHub OIDC -> IAM role routego-github-actions-lambda (RouteGo.Infra/foundation/github-actions.tf).
+# One-time setup per GitHub org/repo: see RouteGo.Infra/CICD.md (variable AWS_LAMBDA_ROLE_ARN, environment "production").
+name: ci-cd
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never run two deploys of the same service at once; a newer PR run cancels an older one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  AWS_REGION: ap-southeast-1
+  SOLUTION: WebhookReceiver.slnx
+  DOTNET_VERSION: "10.0.x"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+  STACK_NAME: routego-webhook-receiver
+  TEMPLATE: template.yaml
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore "$SOLUTION"
+
+      - name: Build (analyzers + warnings-as-errors run here)
+        run: dotnet build "$SOLUTION" -c Release --no-restore
+
+      - name: Test (Testcontainers starts throwaway Postgres / LocalStack / DynamoDB in the runner's Docker)
+        run: dotnet test "$SOLUTION" -c Release --no-build --logger "trx;LogFileName=results.trx" --results-directory TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults
+          retention-days: 7
+
+  deploy:
+    name: sam deploy
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: AWS credentials (OIDC, no stored keys)
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_LAMBDA_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: sam build
+        run: sam build --template "$TEMPLATE"
+
+      - name: sam deploy
+        run: |
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          GATEWAY_SECRET_ARN="$(aws secretsmanager describe-secret --secret-id routego/payment/gateway --query ARN --output text)"
+          # Every ARN below is derived from account + region + the names Terraform created.
+          # The account-wide Lambda concurrency limit is 10 (new/Free-plan account); a reservation would be refused.
+
+          sam deploy \
+            --stack-name "$STACK_NAME" \
+            --resolve-s3 \
+            --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --tags Project=routego \
+            --parameter-overrides \
+            WebhookQueueUrl="https://sqs.${AWS_REGION}.amazonaws.com/${ACCOUNT}/payment-webhooks-q" \
+            WebhookQueueArn="arn:aws:sqs:${AWS_REGION}:${ACCOUNT}:payment-webhooks-q" \
+            GatewaySecretArn="$GATEWAY_SECRET_ARN" \
+            ReservedConcurrency=0
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Stack \`$STACK_NAME\` at \`${GITHUB_SHA::7}\`"
+            echo '```'
+            aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].[StackStatus,Outputs]' --output yaml || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
